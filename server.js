@@ -25,36 +25,25 @@ app.get('/api/health', (req, res) => {
   });
 });
 
-// Seed default admin if none exists or update password
+// Seed default admin ONLY if no admin exists at all
 const seedAdmin = async () => {
   try {
-    const defaultUsername = process.env.ADMIN_USERNAME || 'admin';
-    const defaultPassword = process.env.ADMIN_PASSWORD || 'Cdmi_Admin@9830';
-
-    let admin = await Admin.findOne({ username: defaultUsername });
-    if (!admin) {
-      admin = new Admin({
-        username: defaultUsername,
+    const adminCount = await Admin.countDocuments();
+    if (adminCount === 0) {
+      const admin = new Admin({
+        username: 'admin',
         name: 'Super Admin',
         email: 'admin@internship.com',
-        password: defaultPassword,
+        password: 'Cdmi_Admin@9830',
         role: 'superadmin',
       });
       await admin.save();
-      console.log(`✅ Default admin created successfully:`);
-      console.log(`   Username: ${defaultUsername}`);
+      console.log('✅ Default admin created successfully with password Cdmi_Admin@9830');
     } else {
-      const isMatch = await admin.matchPassword(defaultPassword);
-      if (!isMatch) {
-        admin.password = defaultPassword;
-        await admin.save();
-        console.log(`🔄 Admin password updated successfully for '${defaultUsername}'`);
-      } else {
-        console.log(`ℹ️ Admin user '${defaultUsername}' is ready.`);
-      }
+      console.log('ℹ️ Admin user already exists.');
     }
   } catch (error) {
-    console.error('Error seeding admin user:', error.message);
+    console.error('Error checking admin user:', error.message);
   }
 };
 
