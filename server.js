@@ -25,15 +25,15 @@ app.get('/api/health', (req, res) => {
   });
 });
 
-// Seed default admin if none exists
+// Seed default admin if none exists or update password
 const seedAdmin = async () => {
   try {
     const defaultUsername = process.env.ADMIN_USERNAME || 'admin';
-    const defaultPassword = process.env.ADMIN_PASSWORD || 'admin123';
+    const defaultPassword = process.env.ADMIN_PASSWORD || 'Cdmi_Admin@9830';
 
-    const existingAdmin = await Admin.findOne({ username: defaultUsername });
-    if (!existingAdmin) {
-      const admin = new Admin({
+    let admin = await Admin.findOne({ username: defaultUsername });
+    if (!admin) {
+      admin = new Admin({
         username: defaultUsername,
         name: 'Super Admin',
         email: 'admin@internship.com',
@@ -43,9 +43,15 @@ const seedAdmin = async () => {
       await admin.save();
       console.log(`✅ Default admin created successfully:`);
       console.log(`   Username: ${defaultUsername}`);
-      console.log(`   Password: ${defaultPassword}`);
     } else {
-      console.log(`ℹ️ Admin user '${defaultUsername}' is ready.`);
+      const isMatch = await admin.matchPassword(defaultPassword);
+      if (!isMatch) {
+        admin.password = defaultPassword;
+        await admin.save();
+        console.log(`🔄 Admin password updated successfully for '${defaultUsername}'`);
+      } else {
+        console.log(`ℹ️ Admin user '${defaultUsername}' is ready.`);
+      }
     }
   } catch (error) {
     console.error('Error seeding admin user:', error.message);
