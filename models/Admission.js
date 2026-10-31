@@ -36,6 +36,12 @@ const admissionSchema = new mongoose.Schema(
       required: true,
       trim: true,
     },
+    company: {
+      type: String,
+      enum: ['Creative Web Infotech', 'Granthi It Solution'],
+      default: 'Creative Web Infotech',
+      trim: true,
+    },
     duration: {
       type: String,
       default: '6 Months',

@@ -133,20 +133,32 @@ router.get('/stats', protect, async (req, res) => {
 // @access  Private
 router.get('/', protect, async (req, res) => {
   try {
-    const { search, status, domain, fromDate, toDate } = req.query;
+    const { search, status, domain, fromDate, toDate, includeConverted } = req.query;
     let query = {};
 
-    if (search) {
-      query.$or = [
-        { studentName: { $regex: search, $options: 'i' } },
-        { contactNo: { $regex: search, $options: 'i' } },
-        { email: { $regex: search, $options: 'i' } },
-        { collegeName: { $regex: search, $options: 'i' } },
-      ];
+    // Exclude inquiries that have already been converted to admission
+    if (includeConverted === 'true') {
+      if (status && status !== 'All') {
+        query.status = status;
+      }
+    } else {
+      query.isConverted = { $ne: true };
+      query.status = { $ne: 'Converted to Admission' };
+      if (status && status !== 'All' && status !== 'Converted to Admission') {
+        query.status = status;
+      }
     }
 
-    if (status && status !== 'All') {
-      query.status = status;
+    if (search) {
+      query.$and = query.$and || [];
+      query.$and.push({
+        $or: [
+          { studentName: { $regex: search, $options: 'i' } },
+          { contactNo: { $regex: search, $options: 'i' } },
+          { email: { $regex: search, $options: 'i' } },
+          { collegeName: { $regex: search, $options: 'i' } },
+        ]
+      });
     }
 
     if (domain && domain !== 'All') {
@@ -427,6 +439,7 @@ router.post('/:id/convert-admission', protect, async (req, res) => {
     }
 
     const {
+      company,
       duration,
       batchTime,
       admissionDate,
@@ -452,6 +465,7 @@ router.post('/:id/convert-admission', protect, async (req, res) => {
     const newAdmission = new Admission({
       inquiryId: inquiry._id,
       registrationNo: regNo,
+      company: company || 'Creative Web Infotech',
       studentName: inquiry.studentName,
       email: inquiry.email,
       contactNo: inquiry.contactNo,

@@ -67,6 +67,7 @@ router.get('/:id', protect, async (req, res) => {
 router.put('/:id', protect, async (req, res) => {
   try {
     const {
+      company,
       paidFees,
       totalFees,
       duration,
@@ -82,6 +83,8 @@ router.put('/:id', protect, async (req, res) => {
     if (!admission) {
       return res.status(404).json({ success: false, message: 'Admission not found' });
     }
+
+    if (company) admission.company = company;
 
     if (totalFees !== undefined) admission.totalFees = Number(totalFees);
     if (paidFees !== undefined) admission.paidFees = Number(paidFees);

@@ -30,8 +30,8 @@ const followupSchema = new mongoose.Schema(
     },
     recordedBy: {
       type: String,
-      enum: ['Haresh Sir', 'Mishal Sir', 'Jaydip Sir', 'Sanjana', 'Admin', 'Other'],
       default: 'Haresh Sir',
+      trim: true,
     },
   },
   { timestamps: true }
@@ -101,7 +101,6 @@ const inquirySchema = new mongoose.Schema(
     },
     takenBy: {
       type: String,
-      enum: ['Haresh Sir', 'Mishal Sir', 'Jaydip Sir', 'Other'],
       default: 'Haresh Sir',
       trim: true,
     },
