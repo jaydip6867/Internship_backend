@@ -133,20 +133,12 @@ router.get('/stats', protect, async (req, res) => {
 // @access  Private
 router.get('/', protect, async (req, res) => {
   try {
-    const { search, status, domain, fromDate, toDate, includeConverted } = req.query;
+    const { search, status, domain, fromDate, toDate } = req.query;
     let query = {};
 
-    // Exclude inquiries that have already been converted to admission
-    if (includeConverted === 'true') {
-      if (status && status !== 'All') {
-        query.status = status;
-      }
-    } else {
-      query.isConverted = { $ne: true };
-      query.status = { $ne: 'Converted to Admission' };
-      if (status && status !== 'All' && status !== 'Converted to Admission') {
-        query.status = status;
-      }
+    // Filter by specific status if selected, otherwise return all inquiries
+    if (status && status !== 'All') {
+      query.status = status;
     }
 
     if (search) {
