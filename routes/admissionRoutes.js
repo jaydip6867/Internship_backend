@@ -62,16 +62,22 @@ router.get('/:id', protect, async (req, res) => {
 });
 
 // @route   PUT /api/admissions/:id
-// @desc    Update admission details (e.g. fees update, status)
+// @desc    Update admission details
 // @access  Private
 router.put('/:id', protect, async (req, res) => {
   try {
     const {
+      studentName,
+      contactNo,
+      email,
+      collegeName,
+      domain,
       company,
       paidFees,
       totalFees,
       duration,
       batchTime,
+      admissionDate,
       joiningDate,
       paymentMode,
       paymentReference,
@@ -84,12 +90,18 @@ router.put('/:id', protect, async (req, res) => {
       return res.status(404).json({ success: false, message: 'Admission not found' });
     }
 
+    if (studentName) admission.studentName = studentName;
+    if (contactNo) admission.contactNo = contactNo;
+    if (email !== undefined) admission.email = email;
+    if (collegeName !== undefined) admission.collegeName = collegeName;
+    if (domain) admission.domain = domain;
     if (company) admission.company = company;
 
     if (totalFees !== undefined) admission.totalFees = Number(totalFees);
     if (paidFees !== undefined) admission.paidFees = Number(paidFees);
     if (duration) admission.duration = duration;
     if (batchTime) admission.batchTime = batchTime;
+    if (admissionDate) admission.admissionDate = admissionDate;
     if (joiningDate) admission.joiningDate = joiningDate;
     if (paymentMode) admission.paymentMode = paymentMode;
     if (paymentReference !== undefined) admission.paymentReference = paymentReference;
@@ -98,6 +110,20 @@ router.put('/:id', protect, async (req, res) => {
 
     const updatedAdmission = await admission.save();
 
+    // Sync changes to the linked inquiry as well
+    if (admission.inquiryId) {
+      const inquiryUpdates = {};
+      if (studentName) inquiryUpdates.studentName = studentName;
+      if (contactNo) inquiryUpdates.contactNo = contactNo;
+      if (email !== undefined) inquiryUpdates.email = email;
+      if (collegeName !== undefined) inquiryUpdates.collegeName = collegeName;
+      if (domain) inquiryUpdates.interestedDomain = domain;
+
+      if (Object.keys(inquiryUpdates).length > 0) {
+        await Inquiry.findByIdAndUpdate(admission.inquiryId, inquiryUpdates);
+      }
+    }
+
     return res.json({
       success: true,
       message: 'Admission details updated successfully',
@@ -105,7 +131,7 @@ router.put('/:id', protect, async (req, res) => {
     });
   } catch (error) {
     console.error('Update admission error:', error);
-    return res.status(500).json({ success: false, message: 'Failed to update admission' });
+    return res.status(500).json({ success: false, message: 'Failed to update admission', error: error.message });
   }
 });
 
