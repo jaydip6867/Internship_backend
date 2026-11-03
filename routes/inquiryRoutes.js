@@ -333,9 +333,63 @@ router.put('/:id', protect, async (req, res) => {
     if (reference !== undefined) inquiry.reference = reference;
     if (referenceDetails !== undefined) inquiry.referenceDetails = referenceDetails;
     if (notes !== undefined) inquiry.notes = notes;
-    if (status) inquiry.status = status;
     if (inquiryDate) inquiry.inquiryDate = inquiryDate;
     if (takenBy) inquiry.takenBy = takenBy;
+
+    if (status) {
+      inquiry.status = status;
+      if (status === 'Converted to Admission') {
+        inquiry.isConverted = true;
+
+        // Check if admission record already exists for this inquiry
+        let existingAdmission = null;
+        if (inquiry.admissionId) {
+          existingAdmission = await Admission.findById(inquiry.admissionId);
+        }
+
+        if (!existingAdmission) {
+          const count = await Admission.countDocuments();
+          const regNo = `INT-${new Date().getFullYear()}-${String(count + 1).padStart(4, '0')}`;
+
+          const newAdmission = new Admission({
+            inquiryId: inquiry._id,
+            registrationNo: regNo,
+            studentName: inquiry.studentName,
+            email: inquiry.email,
+            contactNo: inquiry.contactNo,
+            collegeName: inquiry.collegeName,
+            domain: inquiry.interestedDomain,
+            company: req.body.company || 'Creative Web Infotech',
+            duration: req.body.duration || '6 Months (Full Live Project Internship)',
+            batchTime: req.body.batchTime || 'Morning (9:00 AM - 1:00 PM)',
+            admissionDate: req.body.admissionDate || new Date(),
+            joiningDate: req.body.joiningDate || new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+            totalFees: Number(req.body.totalFees || 15000),
+            paidFees: Number(req.body.paidFees || 5000),
+            paymentMode: req.body.paymentMode || 'UPI / GPay / PhonePe',
+            paymentReference: req.body.paymentReference || '',
+            remarks: req.body.admissionRemarks || inquiry.notes || '',
+            status: 'Active',
+          });
+
+          const savedAdmission = await newAdmission.save();
+          inquiry.admissionId = savedAdmission._id;
+        } else {
+          if (req.body.company) existingAdmission.company = req.body.company;
+          if (req.body.totalFees !== undefined) existingAdmission.totalFees = Number(req.body.totalFees);
+          if (req.body.paidFees !== undefined) existingAdmission.paidFees = Number(req.body.paidFees);
+          await existingAdmission.save();
+        }
+      } else {
+        if (inquiry.isConverted) {
+          inquiry.isConverted = false;
+          if (inquiry.admissionId) {
+            await Admission.findByIdAndDelete(inquiry.admissionId);
+            inquiry.admissionId = undefined;
+          }
+        }
+      }
+    }
 
     const updatedInquiry = await inquiry.save();
     return res.json({
