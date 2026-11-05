@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const Inquiry = require('../models/Inquiry');
 const Admission = require('../models/Admission');
+const Lead = require('../models/Lead');
 const { protect } = require('../middleware/authMiddleware');
 
 // Helper to clean phone numbers
@@ -271,6 +272,16 @@ router.get('/stats', protect, async (req, res) => {
       return latest && latest.nextFollowupDate && new Date(latest.nextFollowupDate) <= endOfToday;
     }).length;
 
+    // Lead metrics
+    let totalLeads = 0;
+    let pendingLeads = 0;
+    try {
+      totalLeads = await Lead.countDocuments();
+      pendingLeads = await Lead.countDocuments({ isConvertedToInquiry: { $ne: true } });
+    } catch (e) {
+      console.error('Lead count error in stats:', e.message);
+    }
+
     return res.json({
       success: true,
       stats: {
@@ -280,6 +291,8 @@ router.get('/stats', protect, async (req, res) => {
         followupCount,
         todayInquiries,
         todayDueCount,
+        totalLeads,
+        pendingLeads,
         conversionRate: totalInquiries > 0 ? ((totalAdmissions / totalInquiries) * 100).toFixed(1) : 0,
         domainStats,
         statusStats,
