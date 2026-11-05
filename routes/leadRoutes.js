@@ -33,6 +33,7 @@ router.post('/public', async (req, res) => {
       city,
       preferredBatch,
       duration,
+      internshipType,
       notes,
     } = req.body;
 
@@ -61,6 +62,7 @@ router.post('/public', async (req, res) => {
         : `Re-submitted on ${new Date().toLocaleDateString()}`;
       if (city) existingLead.city = city;
       if (interestedDomain) existingLead.interestedDomain = interestedDomain;
+      if (internshipType) existingLead.internshipType = internshipType;
       await existingLead.save();
 
       return res.status(200).json({
@@ -81,6 +83,7 @@ router.post('/public', async (req, res) => {
       semester: (semester || '6th Semester').trim(),
       interestedDomain: (interestedDomain || 'Full Stack Web Development (MERN)').trim(),
       city: (city || 'Surat').trim(),
+      internshipType: (internshipType || 'free (interview crack mandatory.)').trim(),
       preferredBatch: (preferredBatch || 'Morning (9:00 AM - 1:00 PM)').trim(),
       duration: (duration || '6 Months (Full Live Project Internship)').trim(),
       notes: (notes || '').trim(),
@@ -192,10 +195,11 @@ router.post('/:id/convert-to-inquiry', protect, async (req, res) => {
     const finalSemester = (semester || lead.semester || '6th Semester').trim();
     const finalStatus = (status || 'New').trim();
 
+    const typeInfo = lead.internshipType ? `Preference: ${lead.internshipType}` : '';
     const locationInfo = lead.city ? `City: ${lead.city}` : '';
     const batchInfo = lead.preferredBatch ? `Batch: ${lead.preferredBatch}` : '';
     const durationInfo = lead.duration ? `Duration: ${lead.duration}` : '';
-    const combinedRefDetails = [locationInfo, batchInfo, durationInfo].filter(Boolean).join(' | ') || 'Google Form Online Lead';
+    const combinedRefDetails = [typeInfo, locationInfo, batchInfo, durationInfo].filter(Boolean).join(' | ') || 'Google Form Online Lead';
 
     const newInquiry = new Inquiry({
       studentName: lead.studentName,

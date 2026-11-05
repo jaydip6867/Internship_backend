@@ -48,6 +48,11 @@ const leadSchema = new mongoose.Schema(
       default: 'Surat',
       trim: true,
     },
+    internshipType: {
+      type: String,
+      default: 'free (interview crack mandatory.)',
+      trim: true,
+    },
     preferredBatch: {
       type: String,
       default: 'Morning (9:00 AM - 1:00 PM)',
