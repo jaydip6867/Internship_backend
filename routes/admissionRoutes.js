@@ -61,6 +61,18 @@ router.get('/:id', protect, async (req, res) => {
   }
 });
 
+// Helper to clean and normalize mobile numbers
+const cleanPhoneNumber = (val) => {
+  if (!val) return '';
+  let str = String(val).trim().replace(/\.0+$/, '').replace(/[^0-9]/g, '');
+  if (str.length === 12 && str.startsWith('91')) {
+    str = str.slice(2);
+  } else if (str.length === 11 && str.startsWith('0')) {
+    str = str.slice(1);
+  }
+  return str || String(val).trim();
+};
+
 // @route   POST /api/admissions/bulk
 // @desc    Bulk import admissions from Excel
 // @access  Private
@@ -71,12 +83,41 @@ router.post('/bulk', protect, async (req, res) => {
       return res.status(400).json({ success: false, message: 'No admission records provided for import' });
     }
 
+    // Check existing admissions by phone to prevent duplicates
+    const existingAdmissions = await Admission.find({}, { contactNo: 1 });
+    const existingPhoneSet = new Set();
+    existingAdmissions.forEach((adm) => {
+      const p = cleanPhoneNumber(adm.contactNo);
+      if (p) existingPhoneSet.add(p);
+    });
+
+    const batchPhoneSet = new Set();
+    let skippedDuplicates = 0;
     let count = await Admission.countDocuments();
     const currentYear = new Date().getFullYear();
     const insertedAdmissions = [];
 
     for (const item of admissions) {
-      const studentName = (
+      const rawContact = item.contactNo || 
+        item['Contact Number'] || 
+        item['Contact No'] || 
+        item['Phone'] || 
+        item['CONTACT NO'] || 
+        item['Mobile'] || 
+        '';
+
+      const cleanedPhone = cleanPhoneNumber(rawContact);
+      if (!cleanedPhone) continue;
+
+      // Duplicate check: skip if mobile number already enrolled
+      if (existingPhoneSet.has(cleanedPhone) || batchPhoneSet.has(cleanedPhone)) {
+        skippedDuplicates++;
+        continue;
+      }
+
+      batchPhoneSet.add(cleanedPhone);
+
+      const rawName = (
         item.studentName || 
         item['Student Name'] || 
         item['Name'] || 
@@ -84,16 +125,7 @@ router.post('/bulk', protect, async (req, res) => {
         ''
       ).trim();
 
-      const contactNo = String(
-        item.contactNo || 
-        item['Contact Number'] || 
-        item['Contact No'] || 
-        item['Phone'] || 
-        item['CONTACT NO'] || 
-        ''
-      ).trim();
-
-      if (!studentName || !contactNo) continue;
+      const studentName = rawName || `Student - ${cleanedPhone.slice(-4)}`;
 
       count += 1;
       const regNo = (
@@ -202,16 +234,25 @@ router.post('/bulk', protect, async (req, res) => {
     }
 
     if (insertedAdmissions.length === 0) {
+      if (skippedDuplicates > 0) {
+        return res.status(200).json({
+          success: true,
+          count: 0,
+          duplicatesSkipped: skippedDuplicates,
+          message: `All ${skippedDuplicates} records already exist with enrolled mobile numbers. No duplicate admissions were added.`,
+        });
+      }
       return res.status(400).json({
         success: false,
-        message: 'No valid admission records found. Make sure Student Name and Contact Number are present in the Excel file.',
+        message: 'No valid admission records found. Make sure mobile numbers are present in the Excel file.',
       });
     }
 
     return res.status(201).json({
       success: true,
-      message: `${insertedAdmissions.length} admissions imported successfully`,
+      message: `${insertedAdmissions.length} admissions imported successfully.${skippedDuplicates > 0 ? ` (${skippedDuplicates} existing mobile numbers were skipped)` : ''}`,
       count: insertedAdmissions.length,
+      duplicatesSkipped: skippedDuplicates,
       admissions: insertedAdmissions,
     });
   } catch (error) {

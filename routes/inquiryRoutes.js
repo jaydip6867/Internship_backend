@@ -287,6 +287,18 @@ router.post('/', protect, async (req, res) => {
   }
 });
 
+// Helper to clean and normalize mobile numbers
+const cleanPhoneNumber = (val) => {
+  if (!val) return '';
+  let str = String(val).trim().replace(/\.0+$/, '').replace(/[^0-9]/g, '');
+  if (str.length === 12 && str.startsWith('91')) {
+    str = str.slice(2);
+  } else if (str.length === 11 && str.startsWith('0')) {
+    str = str.slice(1);
+  }
+  return str || String(val).trim();
+};
+
 // @route   POST /api/inquiries/bulk
 // @desc    Bulk import inquiries from Excel
 // @access  Private
@@ -297,29 +309,55 @@ router.post('/bulk', protect, async (req, res) => {
       return res.status(400).json({ success: false, message: 'No inquiry records provided for import' });
     }
 
+    // 1. Fetch all existing contact numbers from database to prevent duplicates
+    const existingInquiries = await Inquiry.find({}, { contactNo: 1 });
+    const existingPhoneSet = new Set();
+    existingInquiries.forEach((inq) => {
+      const p = cleanPhoneNumber(inq.contactNo);
+      if (p) existingPhoneSet.add(p);
+    });
+
+    const batchPhoneSet = new Set();
+    let skippedDuplicates = 0;
     const docsToInsert = [];
+
     for (const item of inquiries) {
-      const studentName = (
+      // Find mobile / contact number from possible column keys
+      const rawContact = item.contactNo || 
+        item.phone || 
+        item['CONTACT NO.'] || 
+        item['CONTACT NO'] || 
+        item['Contact Number'] || 
+        item['Contact No'] || 
+        item['Phone'] || 
+        item['Mobile'] || 
+        '';
+
+      const cleanedPhone = cleanPhoneNumber(rawContact);
+      if (!cleanedPhone) continue; // Skip if no phone number at all
+
+      // Duplicate Check: if mobile number already exists in DB or current batch, skip!
+      if (existingPhoneSet.has(cleanedPhone) || batchPhoneSet.has(cleanedPhone)) {
+        skippedDuplicates++;
+        continue;
+      }
+
+      batchPhoneSet.add(cleanedPhone);
+
+      // Student name (fallback if empty)
+      const rawName = (
         item.studentName || 
         item.name || 
         item['Student Name'] || 
         item['NAME'] || 
         item['NAME '] || 
+        item['Name'] || 
         ''
       ).trim();
 
-      const contactNo = String(
-        item.contactNo || 
-        item.phone || 
-        item['CONTACT NO.'] || 
-        item['CONTACT NO'] || 
-        item['Contact Number'] || 
-        item['Phone'] || 
-        ''
-      ).trim();
+      const studentName = rawName || `Student - ${cleanedPhone.slice(-4)}`;
 
-      if (!studentName || !contactNo) continue;
-
+      // Domain (optional, fallback if empty)
       const domain = (
         item.interestedDomain || 
         item.domain || 
@@ -331,6 +369,7 @@ router.post('/bulk', protect, async (req, res) => {
         'Full Stack Web Development (MERN)'
       ).trim();
 
+      // Counselor / Taken By (optional, fallback if empty)
       const takenBy = (
         item.takenBy || 
         item['TAKEN BY'] || 
@@ -339,6 +378,7 @@ router.post('/bulk', protect, async (req, res) => {
         'Haresh Sir'
       ).trim();
 
+      // College name (optional)
       const collegeName = (
         item.collegeName || 
         item.college || 
@@ -348,6 +388,7 @@ router.post('/bulk', protect, async (req, res) => {
         ''
       ).trim();
 
+      // Reference source (optional)
       const reference = (
         item.reference || 
         item['REFRENCE'] || 
@@ -379,13 +420,6 @@ router.post('/bulk', protect, async (req, res) => {
         if (!isNaN(parsed.getTime())) inqDate = parsed;
       }
 
-      const status = (
-        item.status || 
-        item['STATUS'] || 
-        item['Status'] || 
-        'New'
-      ).trim();
-
       // Check for initial followup / call details
       const callDetails = (
         item.callDetails || 
@@ -399,7 +433,7 @@ router.post('/bulk', protect, async (req, res) => {
       if (callDetails) {
         followups.push({
           date: inqDate,
-          status: status === 'Interested' ? 'Interested' : 'Callback Requested',
+          status: 'Callback Requested',
           remarks: callDetails,
           recordedBy: takenBy || 'Haresh Sir',
         });
@@ -407,7 +441,7 @@ router.post('/bulk', protect, async (req, res) => {
 
       docsToInsert.push({
         studentName,
-        contactNo,
+        contactNo: cleanedPhone,
         alternateContactNo: item.alternateContactNo || item['Alternate Contact'] || '',
         email: (item.email || item['Email'] || '').trim().toLowerCase(),
         collegeName,
@@ -418,25 +452,34 @@ router.post('/bulk', protect, async (req, res) => {
         referenceDetails,
         notes,
         takenBy,
-        status: status || 'New',
+        status: 'New', // ALWAYS 'New' as requested
         inquiryDate: inqDate,
         followups,
-        isConverted: status === 'Converted to Admission',
+        isConverted: false,
       });
     }
 
     if (docsToInsert.length === 0) {
+      if (skippedDuplicates > 0) {
+        return res.status(200).json({
+          success: true,
+          count: 0,
+          duplicatesSkipped: skippedDuplicates,
+          message: `All ${skippedDuplicates} records in the Excel file already exist with matching mobile numbers. No duplicate inquiries were added.`,
+        });
+      }
       return res.status(400).json({
         success: false,
-        message: 'No valid records found. Make sure Student Name and Contact Number are present in the Excel file.',
+        message: 'No valid records found in the Excel file. Please ensure mobile numbers are present.',
       });
     }
 
     const inserted = await Inquiry.insertMany(docsToInsert);
     return res.status(201).json({
       success: true,
-      message: `${inserted.length} inquiries imported successfully`,
+      message: `${inserted.length} new inquiries imported successfully.${skippedDuplicates > 0 ? ` (${skippedDuplicates} existing mobile numbers were skipped)` : ''}`,
       count: inserted.length,
+      duplicatesSkipped: skippedDuplicates,
       inquiries: inserted,
     });
   } catch (error) {

@@ -77,8 +77,9 @@ const inquirySchema = new mongoose.Schema(
     },
     interestedDomain: {
       type: String,
-      required: [true, 'Interested domain/technology is required'],
+      required: false,
       trim: true,
+      default: 'Full Stack Web Development (MERN)',
     },
     reference: {
       type: String,
