@@ -16,6 +16,7 @@ app.use(express.json());
 app.use('/api/auth', require('./routes/authRoutes'));
 app.use('/api/inquiries', require('./routes/inquiryRoutes'));
 app.use('/api/admissions', require('./routes/admissionRoutes'));
+app.use('/api/leads', require('./routes/leadRoutes'));
 
 app.get('/api/health', (req, res) => {
   res.json({
