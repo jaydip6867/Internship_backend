@@ -287,6 +287,164 @@ router.post('/', protect, async (req, res) => {
   }
 });
 
+// @route   POST /api/inquiries/bulk
+// @desc    Bulk import inquiries from Excel
+// @access  Private
+router.post('/bulk', protect, async (req, res) => {
+  try {
+    const { inquiries } = req.body;
+    if (!Array.isArray(inquiries) || inquiries.length === 0) {
+      return res.status(400).json({ success: false, message: 'No inquiry records provided for import' });
+    }
+
+    const docsToInsert = [];
+    for (const item of inquiries) {
+      const studentName = (
+        item.studentName || 
+        item.name || 
+        item['Student Name'] || 
+        item['NAME'] || 
+        item['NAME '] || 
+        ''
+      ).trim();
+
+      const contactNo = String(
+        item.contactNo || 
+        item.phone || 
+        item['CONTACT NO.'] || 
+        item['CONTACT NO'] || 
+        item['Contact Number'] || 
+        item['Phone'] || 
+        ''
+      ).trim();
+
+      if (!studentName || !contactNo) continue;
+
+      const domain = (
+        item.interestedDomain || 
+        item.domain || 
+        item.internship || 
+        item['INTRENSHIP'] || 
+        item['INTERNSHIP'] || 
+        item['Domain'] || 
+        item['Interested Domain'] || 
+        'Full Stack Web Development (MERN)'
+      ).trim();
+
+      const takenBy = (
+        item.takenBy || 
+        item['TAKEN BY'] || 
+        item['TAKEN BY '] || 
+        item['Counselor'] || 
+        'Haresh Sir'
+      ).trim();
+
+      const collegeName = (
+        item.collegeName || 
+        item.college || 
+        item['COLLAGE'] || 
+        item['COLLEGE'] || 
+        item['College Name'] || 
+        ''
+      ).trim();
+
+      const reference = (
+        item.reference || 
+        item['REFRENCE'] || 
+        item['REFERENCE'] || 
+        item['Source'] || 
+        'Walk-in / Direct Visit'
+      ).trim();
+
+      const referenceDetails = (
+        item.referenceDetails || 
+        item['SUGGESTED'] || 
+        item['Suggested'] || 
+        item['Reference Details'] || 
+        ''
+      ).trim();
+
+      const notes = (
+        item.notes || 
+        item['REMARK'] || 
+        item['Remarks'] || 
+        item['Notes'] || 
+        ''
+      ).trim();
+
+      let inqDate = new Date();
+      if (item.inquiryDate || item.date || item['DATE']) {
+        const rawDate = item.inquiryDate || item.date || item['DATE'];
+        const parsed = new Date(rawDate);
+        if (!isNaN(parsed.getTime())) inqDate = parsed;
+      }
+
+      const status = (
+        item.status || 
+        item['STATUS'] || 
+        item['Status'] || 
+        'New'
+      ).trim();
+
+      // Check for initial followup / call details
+      const callDetails = (
+        item.callDetails || 
+        item['CALL DETAILS'] || 
+        item['Followup Remarks'] || 
+        item['Follow-up'] || 
+        ''
+      ).trim();
+
+      const followups = [];
+      if (callDetails) {
+        followups.push({
+          date: inqDate,
+          status: status === 'Interested' ? 'Interested' : 'Callback Requested',
+          remarks: callDetails,
+          recordedBy: takenBy || 'Haresh Sir',
+        });
+      }
+
+      docsToInsert.push({
+        studentName,
+        contactNo,
+        alternateContactNo: item.alternateContactNo || item['Alternate Contact'] || '',
+        email: (item.email || item['Email'] || '').trim().toLowerCase(),
+        collegeName,
+        degree: item.degree || item['Degree'] || 'B.Tech / BE (Computer / IT)',
+        semester: item.semester || item['Semester'] || '6th Semester',
+        interestedDomain: domain,
+        reference,
+        referenceDetails,
+        notes,
+        takenBy,
+        status: status || 'New',
+        inquiryDate: inqDate,
+        followups,
+        isConverted: status === 'Converted to Admission',
+      });
+    }
+
+    if (docsToInsert.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'No valid records found. Make sure Student Name and Contact Number are present in the Excel file.',
+      });
+    }
+
+    const inserted = await Inquiry.insertMany(docsToInsert);
+    return res.status(201).json({
+      success: true,
+      message: `${inserted.length} inquiries imported successfully`,
+      count: inserted.length,
+      inquiries: inserted,
+    });
+  } catch (error) {
+    console.error('Bulk inquiry import error:', error);
+    return res.status(500).json({ success: false, message: 'Failed to import inquiries', error: error.message });
+  }
+});
+
 // @route   PUT /api/inquiries/:id
 // @desc    Update inquiry details
 // @access  Private
