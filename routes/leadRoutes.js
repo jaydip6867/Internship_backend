@@ -16,6 +16,187 @@ const cleanPhone = (val) => {
   return str || String(val).trim();
 };
 
+// Helper to extract values from varying Google Form / Apps Script payload formats
+const extractVal = (body, ...keys) => {
+  if (!body || typeof body !== 'object') return '';
+  for (const k of keys) {
+    if (body[k] !== undefined && body[k] !== null && body[k] !== '') {
+      const val = body[k];
+      return Array.isArray(val) ? String(val[0]).trim() : String(val).trim();
+    }
+  }
+  return '';
+};
+
+// Sync toggle state - Default is FALSE as requested by user:
+// "Note :- atyare integration karvanu che, pan koi record add karvano nathi. hu kahish tyare record running karvanu che."
+let isGoogleFormSyncActive = process.env.GOOGLE_FORM_SYNC_ACTIVE === 'true'; // false by default
+let lastWebhookPing = null;
+
+// @route   GET /api/leads/sync-status
+// @desc    Get Google Form webhook integration & sync status
+// @access  Public / Protected
+router.get('/sync-status', (req, res) => {
+  return res.json({
+    success: true,
+    syncActive: isGoogleFormSyncActive,
+    statusText: isGoogleFormSyncActive ? 'ACTIVE (Saving to Database)' : 'PAUSED / STANDBY (No Records Added)',
+    message: isGoogleFormSyncActive
+      ? 'Google Form sync is active. Submissions are saved to the database.'
+      : 'Google Form integration is configured on standby. Webhook pings are received, but no records are added until enabled.',
+    lastPing: lastWebhookPing,
+  });
+});
+
+// @route   POST /api/leads/toggle-sync
+// @desc    Enable or pause Google Form lead insertion
+// @access  Private
+router.post('/toggle-sync', protect, (req, res) => {
+  if (req.body.active !== undefined) {
+    isGoogleFormSyncActive = Boolean(req.body.active);
+  } else {
+    isGoogleFormSyncActive = !isGoogleFormSyncActive;
+  }
+  console.log(`🔄 [Google Form Integration] Sync active state toggled to: ${isGoogleFormSyncActive}`);
+  return res.json({
+    success: true,
+    syncActive: isGoogleFormSyncActive,
+    message: `Google Form lead sync is now ${isGoogleFormSyncActive ? 'ACTIVE (Will add new records)' : 'PAUSED (On Standby)'}`,
+  });
+});
+
+// @route   POST /api/leads/google-form-webhook
+// @route   POST /api/leads/webhook
+// @desc    Instant webhook trigger from Google Forms / Google Sheet Apps Script
+// @access  Public (Webhook)
+const handleGoogleFormWebhook = async (req, res) => {
+  try {
+    const body = req.body || {};
+
+    // Extract fields from Google Form / Sheet payload (supporting both e.namedValues and direct JSON)
+    const studentName = extractVal(body, 'studentName', 'Student Full Name', 'name', 'Student Name', 'Full Name');
+    const contactNo = extractVal(body, 'contactNo', 'Mobile / WhatsApp Number', 'Mobile Number', 'WhatsApp Number', 'phone', 'contact');
+    const email = extractVal(body, 'email', 'Email Address', 'Email', 'emailAddress');
+    const collegeName = extractVal(body, 'collegeName', 'College / University Name', 'College Name', 'University', 'college');
+    const degree = extractVal(body, 'degree', 'Current Course', 'Course', 'degree');
+    const semester = extractVal(body, 'semester', 'Current Academic Year', 'Academic Year', 'Semester', 'year');
+    const interestedDomain = extractVal(body, 'interestedDomain', 'Preferred Internship Domain', 'Domain', 'track');
+    const internshipType = extractVal(body, 'internshipType', 'Internship Program Preference', 'Program Preference', 'type');
+    const internshipMode = extractVal(body, 'internshipMode', 'Preferred Internship Mode', 'Mode', 'internshipMode');
+    const notes = extractVal(body, 'notes', 'Any Questions? (Optional)', 'Questions', 'remarks', 'comments');
+
+    const cleanedContact = cleanPhone(contactNo);
+    const cleanedName = (studentName || (cleanedContact ? `Student - ${cleanedContact.slice(-4)}` : 'Google Form Applicant')).trim();
+
+    // Record last ping for connection status check
+    lastWebhookPing = {
+      receivedAt: new Date(),
+      studentName: cleanedName,
+      contactNo: cleanedContact,
+      email,
+      domain: interestedDomain,
+      internshipType,
+      syncActive: isGoogleFormSyncActive,
+    };
+
+    // If sync is not active (as requested by user until told to run), do NOT add records to DB!
+    if (!isGoogleFormSyncActive) {
+      console.log(`ℹ️ [Google Form Webhook] Webhook ping received from Google Form for "${cleanedName}" (${cleanedContact || 'No contact'}). Sync is currently PAUSED on standby as requested. No record added to database.`);
+      return res.status(200).json({
+        success: true,
+        syncActive: false,
+        message: 'Google Form webhook integration is connected and verified. Lead sync is currently PAUSED on standby as configured. No record was added to database.',
+        receivedAt: new Date(),
+        preview: {
+          studentName: cleanedName,
+          contactNo: cleanedContact,
+          interestedDomain,
+          internshipType,
+          internshipMode,
+        },
+      });
+    }
+
+    // --- When Sync IS Active: Process & Save to Database ---
+    if (!cleanedContact && !email) {
+      return res.status(400).json({
+        success: false,
+        message: 'Contact number or email is required to register lead.',
+      });
+    }
+
+    // Check duplicate by contact number
+    let existingLead = null;
+    if (cleanedContact) {
+      existingLead = await Lead.findOne({
+        $or: [
+          { contactNo: cleanedContact },
+          { contactNo: contactNo.trim() },
+        ],
+      });
+    }
+
+    if (existingLead) {
+      existingLead.notes = existingLead.notes 
+        ? `${existingLead.notes} | Google Form re-submitted on ${new Date().toLocaleDateString()}` 
+        : `Google Form re-submitted on ${new Date().toLocaleDateString()}`;
+      if (collegeName) existingLead.collegeName = collegeName;
+      if (degree) existingLead.degree = degree;
+      if (semester) existingLead.semester = semester;
+      if (interestedDomain) existingLead.interestedDomain = interestedDomain;
+      if (internshipType) existingLead.internshipType = internshipType;
+      if (internshipMode) existingLead.internshipMode = internshipMode;
+      await existingLead.save();
+
+      console.log(`✅ [Google Form Webhook] Updated existing lead for ${cleanedName} (${cleanedContact})`);
+      return res.status(200).json({
+        success: true,
+        syncActive: true,
+        message: 'Existing lead updated successfully from Google Form',
+        lead: existingLead,
+        alreadyExisted: true,
+      });
+    }
+
+    const newLead = new Lead({
+      studentName: cleanedName,
+      contactNo: cleanedContact,
+      email: (email || '').trim().toLowerCase(),
+      collegeName: (collegeName || '').trim(),
+      degree: (degree || 'BCA').trim(),
+      semester: (semester || '3rd Year').trim(),
+      interestedDomain: (interestedDomain || 'Full Stack Web Development').trim(),
+      internshipType: (internshipType || 'Free Internship').trim(),
+      internshipMode: (internshipMode || 'Offline (Surat)').trim(),
+      city: 'Surat',
+      notes: (notes || '').trim(),
+      source: 'Google Form (Official)',
+      status: 'New Lead',
+      isConvertedToInquiry: false,
+    });
+
+    const savedLead = await newLead.save();
+    console.log(`✅ [Google Form Webhook] Successfully created new lead for ${cleanedName} (${cleanedContact})`);
+
+    return res.status(201).json({
+      success: true,
+      syncActive: true,
+      message: 'New lead recorded successfully from Google Form',
+      lead: savedLead,
+    });
+  } catch (error) {
+    console.error('Google Form webhook error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to process Google Form webhook',
+      error: error.message,
+    });
+  }
+};
+
+router.post('/google-form-webhook', handleGoogleFormWebhook);
+router.post('/webhook', handleGoogleFormWebhook);
+
 // @route   POST /api/leads/public
 // @desc    Submit new lead via Google Form (Public)
 // @access  Public
