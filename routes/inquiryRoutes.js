@@ -4,6 +4,170 @@ const Inquiry = require('../models/Inquiry');
 const Admission = require('../models/Admission');
 const { protect } = require('../middleware/authMiddleware');
 
+// Helper to clean phone numbers
+const cleanPhone = (val) => {
+  if (!val) return '';
+  let str = String(val).trim().replace(/\.0+$/, '').replace(/[^0-9]/g, '');
+  if (str.length === 12 && str.startsWith('91')) {
+    str = str.slice(2);
+  } else if (str.length === 11 && str.startsWith('0')) {
+    str = str.slice(1);
+  }
+  return str || String(val).trim();
+};
+
+// @route   POST /api/inquiries/public-lead
+// @desc    Submit new lead via Google Form (Public - No Auth Required)
+// @access  Public
+router.post('/public-lead', async (req, res) => {
+  try {
+    const {
+      studentName,
+      contactNo,
+      alternateContactNo,
+      email,
+      collegeName,
+      degree,
+      semester,
+      interestedDomain,
+      city,
+      preferredBatch,
+      duration,
+      notes,
+      referenceDetails,
+    } = req.body;
+
+    if (!contactNo) {
+      return res.status(400).json({
+        success: false,
+        message: 'Contact / Mobile Number is required.',
+      });
+    }
+
+    const cleanedContact = cleanPhone(contactNo);
+    const cleanedName = (studentName || `Student - ${cleanedContact.slice(-4)}`).trim();
+
+    // Check if an inquiry already exists with this contact number
+    const existingInquiry = await Inquiry.findOne({
+      $or: [
+        { contactNo: cleanedContact },
+        { contactNo: contactNo.trim() },
+      ],
+    });
+
+    if (existingInquiry) {
+      // Append a note/followup about re-application
+      existingInquiry.followups.push({
+        date: new Date(),
+        status: 'Interested',
+        remarks: `Re-submitted via Google Form (${interestedDomain || 'Internship Inquiry'}${city ? `, City: ${city}` : ''})`,
+        recordedBy: 'Google Form',
+      });
+      await existingInquiry.save();
+
+      return res.status(200).json({
+        success: true,
+        message: 'Thank you! Your application has been updated. Our counseling team will contact you shortly.',
+        inquiry: existingInquiry,
+        alreadyExisted: true,
+      });
+    }
+
+    // Build remarks from extra details
+    const extraDetails = [];
+    if (city) extraDetails.push(`City/Address: ${city}`);
+    if (preferredBatch) extraDetails.push(`Preferred Batch: ${preferredBatch}`);
+    if (duration) extraDetails.push(`Duration: ${duration}`);
+    if (notes) extraDetails.push(`Notes: ${notes}`);
+
+    const combinedNotes = extraDetails.join(' | ');
+
+    const newInquiry = new Inquiry({
+      studentName: cleanedName,
+      contactNo: cleanedContact,
+      alternateContactNo: alternateContactNo ? cleanPhone(alternateContactNo) : '',
+      email: (email || '').trim().toLowerCase(),
+      collegeName: (collegeName || '').trim(),
+      degree: (degree || 'B.Tech / BE (Computer / IT)').trim(),
+      semester: (semester || '6th Semester').trim(),
+      interestedDomain: (interestedDomain || 'Full Stack Web Development (MERN)').trim(),
+      reference: 'Google Form',
+      referenceDetails: referenceDetails || (city ? `Location: ${city}` : 'Online Form Submission'),
+      notes: combinedNotes,
+      status: 'New', // Always New
+      inquiryDate: new Date(),
+      takenBy: 'Haresh Sir',
+      isConverted: false,
+    });
+
+    const savedInquiry = await newInquiry.save();
+
+    return res.status(201).json({
+      success: true,
+      message: 'Your response has been recorded. Our counselor will contact you shortly.',
+      inquiry: savedInquiry,
+    });
+  } catch (error) {
+    console.error('Public lead submission error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to submit application. Please try again.',
+      error: error.message,
+    });
+  }
+});
+
+// @route   GET /api/inquiries/leads
+// @desc    Get all leads submitted via Google Form / Online
+// @access  Private
+router.get('/leads', protect, async (req, res) => {
+  try {
+    const { search, domain, status } = req.query;
+    let query = {
+      $or: [
+        { reference: { $regex: /Google Form|Online|Form|Web/i } },
+        { referenceDetails: { $regex: /Google Form|Online/i } }
+      ]
+    };
+
+    if (status && status !== 'All') {
+      query.status = status;
+    }
+
+    if (domain && domain !== 'All') {
+      query.interestedDomain = domain;
+    }
+
+    if (search) {
+      const searchRegex = { $regex: search, $options: 'i' };
+      query.$and = [
+        {
+          $or: [
+            { studentName: searchRegex },
+            { contactNo: searchRegex },
+            { email: searchRegex },
+            { collegeName: searchRegex },
+            { notes: searchRegex },
+          ]
+        }
+      ];
+    }
+
+    const leads = await Inquiry.find(query)
+      .populate('admissionId')
+      .sort({ createdAt: -1 });
+
+    return res.json({
+      success: true,
+      count: leads.length,
+      leads,
+    });
+  } catch (error) {
+    console.error('Fetch leads error:', error);
+    return res.status(500).json({ success: false, message: 'Server error retrieving leads' });
+  }
+});
+
 // @route   GET /api/inquiries/today-due
 // @desc    Get all inquiries with follow-up due today or overdue
 // @access  Private
