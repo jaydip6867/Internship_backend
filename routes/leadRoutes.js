@@ -28,9 +28,8 @@ const extractVal = (body, ...keys) => {
   return '';
 };
 
-// Sync toggle state - Default is FALSE as requested by user:
-// "Note :- atyare integration karvanu che, pan koi record add karvano nathi. hu kahish tyare record running karvanu che."
-let isGoogleFormSyncActive = process.env.GOOGLE_FORM_SYNC_ACTIVE === 'true'; // false by default
+// Sync toggle state - Default is now TRUE as user requested to start syncing records!
+let isGoogleFormSyncActive = process.env.GOOGLE_FORM_SYNC_ACTIVE !== 'false'; // true by default
 let lastWebhookPing = null;
 
 // @route   GET /api/leads/sync-status
@@ -63,6 +62,239 @@ router.post('/toggle-sync', protect, (req, res) => {
     syncActive: isGoogleFormSyncActive,
     message: `Google Form lead sync is now ${isGoogleFormSyncActive ? 'ACTIVE (Will add new records)' : 'PAUSED (On Standby)'}`,
   });
+});
+
+// @route   POST /api/leads/sync-batch
+// @desc    Batch sync all rows from Google Sheet Apps Script (Adds ONLY to New Leads page / Lead collection)
+// @access  Public (Webhook)
+router.post('/sync-batch', async (req, res) => {
+  try {
+    const items = req.body.leads || req.body.rows || req.body.data || (Array.isArray(req.body) ? req.body : []);
+
+    if (!Array.isArray(items) || items.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'No lead rows provided in request body.',
+      });
+    }
+
+    let addedCount = 0;
+    let updatedCount = 0;
+    let skippedCount = 0;
+
+    for (const row of items) {
+      let studentName = '';
+      let contactNo = '';
+      let email = '';
+      let collegeName = '';
+      let degree = '';
+      let semester = '';
+      let interestedDomain = '';
+      let internshipType = '';
+      let internshipMode = '';
+      let notes = '';
+
+      if (Array.isArray(row)) {
+        studentName = row[1] || '';
+        contactNo = row[2] || '';
+        email = row[3] || '';
+        collegeName = row[4] || '';
+        degree = row[5] || '';
+        semester = row[6] || '';
+        interestedDomain = row[7] || '';
+        internshipType = row[8] || '';
+        internshipMode = row[9] || '';
+        notes = row[10] || '';
+      } else if (typeof row === 'object') {
+        studentName = extractVal(row, 'studentName', 'Student Full Name', 'name', 'Student Name', 'Full Name');
+        contactNo = extractVal(row, 'contactNo', 'Mobile / WhatsApp Number', 'Mobile Number', 'WhatsApp Number', 'phone', 'contact');
+        email = extractVal(row, 'email', 'Email Address', 'Email', 'emailAddress');
+        collegeName = extractVal(row, 'collegeName', 'College / University Name', 'College Name', 'University', 'college');
+        degree = extractVal(row, 'degree', 'Current Course', 'Course', 'degree');
+        semester = extractVal(row, 'semester', 'Current Academic Year', 'Academic Year', 'Semester', 'year');
+        interestedDomain = extractVal(row, 'interestedDomain', 'Preferred Internship Domain', 'Domain', 'track');
+        internshipType = extractVal(row, 'internshipType', 'Internship Program Preference', 'Program Preference', 'type');
+        internshipMode = extractVal(row, 'internshipMode', 'Preferred Internship Mode', 'Mode', 'internshipMode');
+        notes = extractVal(row, 'notes', 'Any Questions? (Optional)', 'Questions', 'remarks', 'comments');
+      }
+
+      const cleanedContact = cleanPhone(contactNo);
+      const cleanedName = String(studentName || '').trim();
+
+      // Skip header row or empty entries
+      if (
+        cleanedName.toLowerCase().includes('student full name') ||
+        String(contactNo).toLowerCase().includes('mobile') ||
+        (!cleanedName && !cleanedContact)
+      ) {
+        skippedCount++;
+        continue;
+      }
+
+      // Check duplicate by contact number in Lead collection
+      let existingLead = null;
+      if (cleanedContact) {
+        existingLead = await Lead.findOne({
+          $or: [
+            { contactNo: cleanedContact },
+            { contactNo: String(contactNo).trim() },
+          ],
+        });
+      }
+
+      if (existingLead) {
+        if (collegeName && !existingLead.collegeName) existingLead.collegeName = collegeName;
+        if (degree && !existingLead.degree) existingLead.degree = degree;
+        if (semester && !existingLead.semester) existingLead.semester = semester;
+        if (interestedDomain && !existingLead.interestedDomain) existingLead.interestedDomain = interestedDomain;
+        if (internshipType && !existingLead.internshipType) existingLead.internshipType = internshipType;
+        if (internshipMode && !existingLead.internshipMode) existingLead.internshipMode = internshipMode;
+        await existingLead.save();
+        updatedCount++;
+      } else {
+        const newLead = new Lead({
+          studentName: cleanedName || (cleanedContact ? `Student - ${cleanedContact.slice(-4)}` : 'Google Form Applicant'),
+          contactNo: cleanedContact || '9999999999',
+          email: String(email || '').trim().toLowerCase(),
+          collegeName: String(collegeName || '').trim(),
+          degree: String(degree || 'BCA').trim(),
+          semester: String(semester || '3rd Year').trim(),
+          interestedDomain: String(interestedDomain || 'Full Stack Web Development').trim(),
+          internshipType: String(internshipType || 'Free Internship').trim(),
+          internshipMode: String(internshipMode || 'Offline (Surat)').trim(),
+          city: 'Surat',
+          notes: String(notes || '').trim(),
+          source: 'Google Sheet Sync',
+          status: 'New Lead',
+          isConvertedToInquiry: false,
+        });
+
+        await newLead.save();
+        addedCount++;
+      }
+    }
+
+    console.log(`✅ [Google Sheet Batch Sync] ${addedCount} leads added to New Leads, ${updatedCount} updated, ${skippedCount} skipped.`);
+
+    return res.json({
+      success: true,
+      message: `${addedCount} leads added to New Leads page successfully.${updatedCount > 0 ? ` (${updatedCount} updated)` : ''}`,
+      addedCount,
+      updatedCount,
+      skippedCount,
+      totalProcessed: items.length,
+    });
+  } catch (error) {
+    console.error('Batch sync error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to batch sync leads from Google Sheet',
+      error: error.message,
+    });
+  }
+});
+
+// @route   POST /api/leads/bulk
+// @desc    Bulk import leads from Excel/CSV (adds ONLY to Lead collection / New Leads page)
+// @access  Private
+router.post('/bulk', protect, async (req, res) => {
+  try {
+    const { leads } = req.body;
+    if (!Array.isArray(leads) || leads.length === 0) {
+      return res.status(400).json({ success: false, message: 'No lead records provided for import' });
+    }
+
+    const existingLeads = await Lead.find({}, { contactNo: 1 });
+    const existingPhoneSet = new Set();
+    existingLeads.forEach((l) => {
+      const p = cleanPhone(l.contactNo);
+      if (p) existingPhoneSet.add(p);
+    });
+
+    const batchPhoneSet = new Set();
+    let skippedDuplicates = 0;
+    const docsToInsert = [];
+
+    for (const item of leads) {
+      const rawContact = item.contactNo || 
+        item.phone || 
+        item['Mobile / WhatsApp Number'] || 
+        item['Mobile Number'] || 
+        item['WhatsApp Number'] || 
+        item['Contact No'] || 
+        item['Phone'] || 
+        item['Mobile'] || 
+        '';
+
+      const cleaned = cleanPhone(rawContact);
+      if (!cleaned) continue;
+
+      if (existingPhoneSet.has(cleaned) || batchPhoneSet.has(cleaned)) {
+        skippedDuplicates++;
+        continue;
+      }
+
+      batchPhoneSet.add(cleaned);
+
+      const studentName = String(
+        item.studentName || 
+        item['Student Full Name'] || 
+        item['Student Name'] || 
+        item['Name'] || 
+        `Student - ${cleaned.slice(-4)}`
+      ).trim();
+
+      const email = String(item.email || item['Email Address'] || item['Email'] || '').trim().toLowerCase();
+      const collegeName = String(item.collegeName || item['College / University Name'] || item['College'] || '').trim();
+      const degree = String(item.degree || item['Current Course'] || item['Course'] || 'BCA').trim();
+      const semester = String(item.semester || item['Current Academic Year'] || item['Semester'] || '3rd Year').trim();
+      const interestedDomain = String(item.interestedDomain || item['Preferred Internship Domain'] || item['Domain'] || 'Full Stack Web Development').trim();
+      const internshipType = String(item.internshipType || item['Internship Program Preference'] || item['Option'] || 'free (interview crack mandatory.)').trim();
+      const internshipMode = String(item.internshipMode || item['Preferred Internship Mode'] || 'Offline (Surat)').trim();
+      const notes = String(item.notes || item['Any Questions? (Optional)'] || item['Notes'] || '').trim();
+
+      docsToInsert.push({
+        studentName,
+        contactNo: cleaned,
+        email,
+        collegeName,
+        degree,
+        semester,
+        interestedDomain,
+        internshipType,
+        internshipMode,
+        city: 'Surat',
+        notes,
+        source: 'Excel Import',
+        status: 'New Lead',
+        isConvertedToInquiry: false,
+      });
+    }
+
+    if (docsToInsert.length === 0) {
+      return res.json({
+        success: true,
+        message: `No new leads were added.${skippedDuplicates > 0 ? ` All ${skippedDuplicates} records already exist in New Leads.` : ''}`,
+        count: 0,
+        skippedDuplicates,
+      });
+    }
+
+    const inserted = await Lead.insertMany(docsToInsert);
+    return res.status(201).json({
+      success: true,
+      count: inserted.length,
+      skippedDuplicates,
+      message: `${inserted.length} leads imported successfully into New Leads page.${skippedDuplicates > 0 ? ` (${skippedDuplicates} existing phone numbers were skipped)` : ''}`,
+    });
+  } catch (error) {
+    console.error('Bulk lead import error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to import leads',
+      error: error.message,
+    });
+  }
 });
 
 // @route   POST /api/leads/google-form-webhook
